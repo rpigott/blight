@@ -1,0 +1,18 @@
+#compdef blight
+
+__blight() {
+	blight "$@" 2>/dev/null
+}
+
+local -a getable=( ${(@f)"$(__blight get help)"} )
+
+_regex_arguments _blight_actions /$'[^\0]#\0'/ \
+	\( /$'set\0'/ :'compadd set' \| \
+	\( /$'get\0'/ :'compadd get' \
+	   /"(${(j.|.)getable})"$'\0'/ :'compadd -a getable' \) \
+	\)
+
+local -a devices=( /sys/class/*/*/brightness(N:h:t2) )
+_arguments -s -S \
+	{-d,--device=}'[Device to manipulate]:device:_multi_parts / devices' \
+	'*::action:= _blight_actions'
