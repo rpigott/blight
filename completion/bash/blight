@@ -1,0 +1,21 @@
+_blight() {
+	local cur=${COMP_WORDS[COMP_CWORD]} prev=${COMP_WORDS[COMP_CWORD-1]}
+	local -a OPTS=( -d --device )
+	local -a ARGS=( get set )
+
+	case $prev in 
+		--device|-d)
+			local -a devices=( /sys/class/{backlight,leds}/* )
+			COMPREPLY+=( ${devices[@]##/sys/class/} )
+			;;
+		get)
+			COMPREPLY+=( $(./blight.py get help 2>/dev/null) )
+			;;
+		*)
+			COMPREPLY+=( ${OPTS[@]} )
+			COMPREPLY+=( ${ARGS[@]} )
+			;;
+	esac
+}
+
+complete -F _blight blight
