@@ -64,6 +64,8 @@ def make_param(target, dev):
 
 	if max_brightness < 99 and dev.get_sysfs_attr("type") == "raw":
 		min_brightness = 0
+	elif dev.get_subsystem() != "backlight":
+		min_brightness = 0
 	else:
 		min_brightness = 1
 
