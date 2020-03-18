@@ -170,18 +170,19 @@ def parse_set_value(target, dev):
 		brightness = cur_brightness
 
 	# Absolute set
+	value = 0
 	try:
 		if target.endswith('%'):
-			brightness += float(target[:-1]) * percent
+			value += float(target[:-1]) * percent
 		else:
-			brightness += float(target)
+			value += float(target)
 	except ValueError as e:
 		die(f"Invalid brightness value: {target!r}")
 	
-	if brightness == 0:
+	if value == 0:
 		return brightness
 	else:
-		return clamp(brightness)
+		return clamp(brightness + value)
 
 def set_brightness(target, dev = None):
 	if not dev:
