@@ -8,6 +8,7 @@ local -a getable=( ${(@f)"$(__blight get help)"} )
 
 _regex_arguments _blight_actions /$'[^\0]#\0'/ \
 	\( /$'set\0'/ :'compadd set' \| \
+	/$'set\0'/ :'compadd toggle' \| \
 	\( /$'get\0'/ :'compadd get' \
 	   /"(${(j.|.)getable})"$'\0'/ :'compadd -a getable' \) \
 	\)

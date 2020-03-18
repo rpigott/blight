@@ -6,6 +6,16 @@ gi.require_version("GUdev", "1.0")
 from gi.repository import GUdev, GLib, Gio
 
 import argparse
+from functools import partial
+import re
+
+from math import floor, ceil, log, exp
+from bisect import bisect_right as bisect, bisect_left
+from operator import neg
+
+def die(message):
+	print(message, file = sys.stderr)
+	exit(1)
 
 def get_default_device():
 	gclient = GUdev.Client()
@@ -30,8 +40,7 @@ def get_default_device():
 			if enabled == "enabled":
 				return dev
 	
-	print(f"Cannot find a suitable backlight device", file = sys.stderr)
-	exit(1)
+	die(f"Cannot find a suitable backlight device")
 
 def get_named_device(devname):
 	if '/' in devname:
@@ -49,15 +58,36 @@ def get_named_device(devname):
 	if dev:
 		return dev
 	else:
-		print(f"No such device: {devname!r}")
-		exit(1)
+		die(f"No such device: {devname!r}")
 
 def devname(dev):
 	subsystem = dev.get_subsystem()
 	name = dev.get_name()
 	return f"{subsystem}/{name}"
 
-def make_param(target, dev):
+def logsteps(maxb, steps):
+    steps = min(maxb - 1, steps)
+    ret = list(range(1, steps + 1)) + [maxb]
+    for n in range(1, steps):
+        scale = (maxb / n) ** (1 / (steps - n + 1))
+        sep = n * (scale - 1)
+        if sep > 1: break
+    for maxb in range(n, steps):
+        ret[maxb] = ret[maxb - 1] * scale
+    return list(map(round, ret))
+
+
+def make_brightness_param(brightness, dev):
+	return GLib.Variant(
+		'(ssu)',
+		[
+			dev.get_subsystem(),
+			dev.get_name(),
+			round(brightness),
+		]
+	)
+
+def parse_set_value(target, dev):
 	max_brightness = dev.get_sysfs_attr_as_int("max_brightness")
 	cur_brightness = dev.get_sysfs_attr_as_int("brightness")
 	percent = max_brightness / 100
@@ -69,37 +99,99 @@ def make_param(target, dev):
 	else:
 		min_brightness = 1
 
+	def clamp(brightness):
+		if brightness < min_brightness:
+			return min_brightness
+		if brightness > max_brightness:
+			return max_brightness
+		return brightness
+
+	# Log step
+	if target.startswith('+//') or target.startswith('-//'):
+		steps = int(target[0] + target[3:])
+		if steps < 0:
+			levels = logsteps(max_brightness, -steps)
+			level = bisect_left(levels, cur_brightness)
+			brightness = levels[max(0, level - 1)]
+		else:
+			levels = logsteps(max_brightness, steps)
+			level = bisect(levels, cur_brightness)
+			brightness = levels[min(steps, level)]
+
+		return clamp(brightness)
+
+	# Linear step
+	if target.startswith('+/') or target.startswith('-/'):
+		try:
+			steps = max_brightness // int(target[0] + target[2:])
+		except ValueError as e:
+			die(f"Invalid brightness value: {target!r}")
+
+		if not cur_brightness % steps:
+			brightness = cur_brightness + steps
+		else:
+			brightness = cur_brightness - (cur_brightness % -steps)
+
+		return clamp(brightness)
+
+	# Relative set
+	if target.startswith('x'):
+		try:
+			scale = float(target[1:])
+		except ValueError as e:
+			die(f"Invalid brightness value: {target!r}")
+
+		brightness = round(cur_brightness * scale)
+		if brightness == cur_brightness:
+			if scale > 1:
+				brightness += 1
+			elif scale < 1:
+				brightness -= 1
+
+		return clamp(brightness)
+
+	if target.startswith('/'):
+		try:
+			scale = float(target[1:])
+		except ValueError as e:
+			die(f"Invalid brightness value: {target!r}")
+
+		brightness = round(cur_brightness / scale)
+		if brightness == cur_brightness:
+			if scale > 1:
+				brightness -= 1
+			elif scale < 1:
+				brightness += 1
+
+		return clamp(brightness)
+
 	brightness = 0
-	if target.startswith('-') or target.startswith('+'):
+	if target.startswith('+') or target.startswith('-'):
 		brightness = cur_brightness
 
+	# Absolute set
 	try:
 		if target.endswith('%'):
 			brightness += float(target[:-1]) * percent
 		else:
 			brightness += float(target)
 	except ValueError as e:
-		print(f"Invalid brightness value: {target!r}", file = sys.stderr)
-		exit(1)
-
-	if brightness < min_brightness:
-		brightness = min_brightness
-	if brightness > max_brightness:
-		brightness = max_brightness
-
-	return GLib.Variant(
-		'(ssu)',
-		[
-			dev.get_subsystem(),
-			dev.get_name(),
-			round(brightness),
-		]
-	)
+		die(f"Invalid brightness value: {target!r}")
+	
+	if brightness == 0:
+		return brightness
+	else:
+		return clamp(brightness)
 
 def set_brightness(target, dev = None):
 	if not dev:
 		dev = get_default_device()
 
+	brightness = parse_set_value(target, dev)
+	param = make_brightness_param(brightness, dev)
+	logind_set_brightness(param)
+
+def logind_set_brightness(param):
 	method = [
 		'org.freedesktop.login1',
 		'/org/freedesktop/login1/session/self',
@@ -107,14 +199,39 @@ def set_brightness(target, dev = None):
 		'SetBrightness'
 	]
 
-	param = make_param(target, dev)
-
 	bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
 	bus.call_sync(
 		*method, param, None,
 		Gio.DBusCallFlags.NONE, -1, None
 	)
 
+def parse_toggle_value(target, dev):
+	max_brightness = dev.get_sysfs_attr_as_int("max_brightness")
+	cur_brightness = dev.get_sysfs_attr_as_int("brightness")
+
+	if not target:
+		brightness = (cur_brightness + 1) % (max_brightness + 1)
+		return brightness
+	else:
+		try:
+			value = int(target)
+		except ValueError as e:
+			die(f"Invalid toggle value")
+
+	brightness = 0
+	if target.startswith('+') or target.startswith('-'):
+		brightness = (cur_brightness + value) % (max_brightness + 1)
+	elif not cur_brightness == value:
+		brightness = value
+	return brightness
+
+def toggle_leds(target, dev = None):
+	if not dev:
+		dev = get_default_device()
+
+	brightness = parse_toggle_value(target, dev)
+	param = make_brightness_param(brightness, dev)
+	logind_set_brightness(param)
 
 getters = {
 	'default-device': None, # Handled
@@ -135,9 +252,10 @@ def get_value(value, dev = None):
 
 	if value in getters:
 		return getters[value](dev)
+	elif not value:
+		return getters["brightness"](dev)
 	else:
-		print(f"Unknown query: {value!r}")
-		exit(1)
+		die(f"Unknown query: {value!r}")
 
 if __name__ == "__main__":
 	parser = argparse.ArgumentParser(prog = "blight")
@@ -145,17 +263,27 @@ if __name__ == "__main__":
 
 	subparsers = parser.add_subparsers(dest = "action", required = True)
 
-	parser_set = subparsers.add_parser("set", help = "Set a value")
+	parser_set = subparsers.add_parser("set", help = "Set an exact or relative brightness value")
 	parser_set.add_argument("value", help = "A brightness value.")
 
-	parser_get = subparsers.add_parser("get", help = "Get a value")
-	parser_get.add_argument("value", help = "Value to get")
+	parser_get = subparsers.add_parser("get", help = "Inspect brightness devices")
+	parser_get.add_argument("value", help = "Value to get", nargs = '?')
 
-	args = parser.parse_args()
+	parser_toggle = subparsers.add_parser("toggle", help = "Toggle a led")
+	parser_toggle.add_argument("value", help = "Value to toggle when on", nargs = '?')
+
+	# replace '-' for numbers
+	escape = partial(re.sub, r'^-(?=[0-9/])', '\u2212')
+	argv = list(map(escape, sys.argv[1:]))
+	args = parser.parse_args(argv)
 	dev = get_named_device(args.device) if args.device else None
 
 	if args.action == "set":
-		set_brightness(args.value, dev = dev)
+		value = args.value.replace('\u2212', '-')
+		set_brightness(value, dev = dev)
+	elif args.action == "toggle":
+		value = args.value and args.value.replace('\u2212', '-')
+		toggle_leds(value, dev = dev)
 	elif args.action == "get":
 		result = get_value(args.value, dev = dev)
 		if isinstance(result, list):
@@ -163,4 +291,3 @@ if __name__ == "__main__":
 				print(item)
 		else:
 			print(result)
-

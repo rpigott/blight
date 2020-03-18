@@ -1,7 +1,7 @@
 _blight() {
 	local cur=${COMP_WORDS[COMP_CWORD]} prev=${COMP_WORDS[COMP_CWORD-1]}
 	local -a OPTS=( -d --device )
-	local -a ARGS=( get set )
+	local -a ARGS=( get set toggle )
 
 	case $prev in 
 		--device|-d)
