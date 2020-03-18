@@ -10,7 +10,7 @@ Set values:
 $ blight set 300 # absolute 300
 $ blight set 50% # 50% of max
 $ blight set +5% # +5% of max
-$ blight set -- -10% # -10% of max
+$ blight set -10% # -10% of max
 $ blight set 100% # max brightness
 $ blight set 0 # off
 ```
