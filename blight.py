@@ -201,10 +201,13 @@ def logind_set_brightness(param):
 	]
 
 	bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
-	bus.call_sync(
-		*method, param, None,
-		Gio.DBusCallFlags.NONE, -1, None
-	)
+	try:
+		bus.call_sync(
+			*method, param, None,
+			Gio.DBusCallFlags.NONE, -1, None
+		)
+	except GLib.GError as e:
+		print(e.message, file = sys.stderr)
 
 def parse_toggle_value(target, dev):
 	max_brightness = dev.get_sysfs_attr_as_int("max_brightness")
